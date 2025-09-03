@@ -1,0 +1,156 @@
+name: Build Executables
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Build Windows executable
+      run: |
+        python build_config.py
+    
+    - name: Create installer with NSIS (optional)
+      run: |
+        choco install nsis -y
+        echo "Creating Windows installer..."
+        # Add NSIS script here if needed
+    
+    - name: Test executable exists
+      run: |
+        dir dist
+        if (Test-Path "dist/DataProcessor.exe") {
+          echo "✓ Windows executable created successfully"
+        } else {
+          echo "✗ Windows executable not found!"
+          exit 1
+        }
+      shell: powershell
+    
+    - name: Upload Windows executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: DataProcessor-Windows
+        path: dist/DataProcessor.exe
+        retention-days: 30
+
+  build-mac:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+        # Install tkinter dependencies
+        brew install python-tk
+    
+    - name: Build Mac app bundle
+      run: |
+        python build_config.py
+    
+    - name: Create DMG installer
+      run: |
+        # Install create-dmg
+        brew install create-dmg
+        
+        # Create DMG
+        create-dmg \
+          --volname "DataProcessor" \
+          --volicon "icon.icns" \
+          --window-pos 200 120 \
+          --window-size 600 400 \
+          --icon-size 100 \
+          --icon "DataProcessor.app" 175 120 \
+          --hide-extension "DataProcessor.app" \
+          --app-drop-link 425 120 \
+          --skip-jenkins \
+          "DataProcessor.dmg" \
+          "dist/" || echo "DMG creation skipped (optional)"
+    
+    - name: Test app bundle exists
+      run: |
+        ls -la dist/
+        if [ -d "dist/DataProcessor.app" ]; then
+          echo "✓ Mac app bundle created successfully"
+          # Zip the .app for upload
+          cd dist
+          zip -r ../DataProcessor-Mac.zip DataProcessor.app
+          cd ..
+        else
+          echo "✗ Mac app bundle not found!"
+          exit 1
+        fi
+    
+    - name: Upload Mac app
+      uses: actions/upload-artifact@v4
+      with:
+        name: DataProcessor-Mac
+        path: DataProcessor-Mac.zip
+        retention-days: 30
+    
+    - name: Upload DMG (if created)
+      uses: actions/upload-artifact@v4
+      with:
+        name: DataProcessor-Mac-DMG
+        path: DataProcessor.dmg
+        if-no-files-found: ignore
+        retention-days: 30
+
+  create-release:
+    needs: [build-windows, build-mac]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          DataProcessor-Windows/DataProcessor.exe
+          DataProcessor-Mac/DataProcessor-Mac.zip
+          DataProcessor-Mac-DMG/DataProcessor.dmg
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
